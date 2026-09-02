@@ -1,0 +1,6 @@
+asyncio
+shutil
+zipfile
+pathlib
+aiogram
+yt_dlp
