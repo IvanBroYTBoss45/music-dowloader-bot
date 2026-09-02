@@ -15,7 +15,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.client.session.aiohttp import AiohttpSession
 import yt_dlp
 
-BOT_TOKEN = "8815241508:AAHI_5ZXM6tR9b_gFcOmc9wC0fIrW6fOE1Q"
+BOT_TOKEN = "8815241508:AAH7f8OjItQ6FhVXXJTY15OcI7VrI6xFuQk"
 
 dp = Dispatcher()
 
