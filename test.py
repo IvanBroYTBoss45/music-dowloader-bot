@@ -10,7 +10,7 @@ from aiogram.filters import CommandStart
 import yt_dlp
 
 # Токен твоего бота из @BotFather
-BOT_TOKEN = ""
+BOT_TOKEN = "8815241508:AAHI_5ZXM6tR9b_gFcOmc9wC0fIrW6fOE1Q"
 
 dp = Dispatcher()
 
