@@ -1,4 +1,6 @@
 import os
+import static_ffmpeg
+static_ffmpeg.add_paths()
 import shutil
 import asyncio
 import zipfile
