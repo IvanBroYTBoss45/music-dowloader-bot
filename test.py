@@ -16,7 +16,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.client.session.aiohttp import AiohttpSession
 import yt_dlp
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8815241508:AAH7f8OjItQ6FhVXXJTY15OcI7VrI6xFuQk")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8815241508:AAHt-iNsD7I6rfnxl54jBceq2uKGM65zw2U")
 
 # ⚠️ ТВОЙ USER ID ДЛЯ АДМИНКИ (впиши сюда свой настоящий ID)
 ADMIN_ID = 7381026134
