@@ -3,6 +3,7 @@ import shutil
 import asyncio
 import zipfile
 import subprocess
+import sqlite3
 from pathlib import Path
 
 import static_ffmpeg
@@ -15,11 +16,61 @@ from aiogram.filters import CommandStart, Command
 from aiogram.client.session.aiohttp import AiohttpSession
 import yt_dlp
 
-BOT_TOKEN = "8815241508:AAH7f8OjItQ6FhVXXJTY15OcI7VrI6xFuQk"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8815241508:AAH7f8OjItQ6FhVXXJTY15OcI7VrI6xFuQk")
+
+# ⚠️ ТВОЙ USER ID ДЛЯ АДМИНКИ (впиши сюда свой настоящий ID)
+ADMIN_ID = 67542741
 
 dp = Dispatcher()
+DB_PATH = "bot_database.db"
 
-def download_tracks_and_zip(tracks: list[str], user_dir: Path) -> Path:
+# ==================== РАБОТА С БАЗОЙ ДАННЫХ ====================
+def init_db():
+    """Создает таблицы, если их еще нет"""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        # Таблица пользователей
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT
+            )
+        """)
+        # Таблица общей статистики
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stats (
+                key TEXT PRIMARY KEY,
+                value INTEGER
+            )
+        """)
+        # Инициализируем счетчик треков, если его нет
+        cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_tracks', 0)")
+        conn.commit()
+
+def log_user_and_tracks(user_id: int, username: str, tracks_count: int):
+    """Записывает юзера в БД и увеличивает счетчик скачанных треков"""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+        cursor.execute("UPDATE stats SET value = value + ? WHERE key = 'total_tracks'", (tracks_count,))
+        conn.commit()
+
+def get_stats():
+    """Возвращает количество юзеров и скачанных треков"""
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT value FROM stats WHERE key = 'total_tracks'")
+        total_tracks = cursor.fetchone()[0]
+        return total_users, total_tracks
+# ==============================================================
+
+
+# Функция обертки для кастомного логирования прогресса yt-dlp нам не подойдет для точного счета "1 из 5",
+# поэтому мы будем обновлять статус прямо в цикле перебора треков.
+def download_tracks_and_zip(tracks: list[str], user_dir: Path, bot: Bot, chat_id: int, status_msg_id: int) -> Path:
     music_dir = user_dir / "music"
     music_dir.mkdir(parents=True, exist_ok=True)
 
@@ -32,31 +83,37 @@ def download_tracks_and_zip(tracks: list[str], user_dir: Path) -> Path:
             'preferredquality': '320',
         }],
         'outtmpl': str(music_dir / '%(title)s.%(ext)s'),
-        'quiet': False,
-        'no_warnings': False,
+        'quiet': True,  # Выключаем лишний спам в консоль
+        'no_warnings': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web']
+                'player_client': ['android', 'ios'],
             }
         },
         'headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
         }
     }
 
+    loop = asyncio.get_event_loop()
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        for track in tracks:
+        for index, track in enumerate(tracks, start=1):
+            # Изменяем текст сообщения в телеграме (вызываем асинхронный метод внутри синхронной функции)
+            status_text = f"⏳ Скачиваю трек {index} из {len(tracks)}:\n`{track}`"
+            asyncio.run_coroutine_threadsafe(
+                bot.edit_message_text(status_text, chat_id=chat_id, message_id=status_msg_id, parse_mode="Markdown"),
+                loop
+            )
+
             try:
-                print(f"[ИНФО] Скачиваем: {track}")
                 ydl.download([f"ytsearch1:{track}"])
             except Exception as e:
                 print(f"[ОШИБКА] Ошибка при скачивании '{track}': {e}")
 
     zip_path = user_dir / "tracks.zip"
-    
-    # Забираем ВСЕ файлы, которые появились в директории (и mp3, и если вдруг не сконвертировалось)
     downloaded_files = [f for f in music_dir.iterdir() if f.is_file()]
-    print(f"[ИНФО] Найдено файлов для упаковки: {len(downloaded_files)}")
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for file in downloaded_files:
@@ -74,6 +131,22 @@ async def start_cmd(message: Message):
     await message.answer(text)
 
 
+# Хэндлер для админки (доступ только по ADMIN_ID)
+@dp.message(Command("admin"))
+async def admin_stats(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        # Обычным юзерам бот просто ничего не ответит или скажет, что команды нет
+        return
+
+    users_count, tracks_count = get_stats()
+    admin_text = (
+        "📊 **Статистика бота:**\n\n"
+        f"👥 Всего пользователей в БД: `{users_count}`\n"
+        f"🎵 Всего скачано треков: `{tracks_count}`"
+    )
+    await message.answer(admin_text, parse_mode="Markdown")
+
+
 @dp.message(Command("check"))
 async def check_ffmpeg(message: Message):
     try:
@@ -87,26 +160,32 @@ async def check_ffmpeg(message: Message):
         await message.answer(f"❌ FFmpeg не найден: {e}")
 
 
-async def process_tracks_pipeline(message: Message, tracks: list[str]):
+async def process_tracks_pipeline(message: Message, tracks: list[str], bot: Bot):
     if not tracks:
         await message.answer("Список треков пустой!")
         return
 
-    status_msg = await message.answer(f"Принято! Обрабатываю {len(tracks)} треков...")
+    status_msg = await message.answer(f"Принято! Начинаю обработку {len(tracks)} треков...")
     user_dir = Path(f"downloads/user_{message.from_user.id}_{message.message_id}")
 
     try:
-        zip_path = await asyncio.to_thread(download_tracks_and_zip, tracks, user_dir)
+        # Передаем bot, chat_id и id сообщения для динамического обновления текста
+        zip_path = await asyncio.to_thread(
+            download_tracks_and_zip, tracks, user_dir, bot, message.chat.id, status_msg.message_id
+        )
 
-        if not zip_path.exists() or zip_path.stat().st_size <= 22:  # 22 байта — размер абсолютно пустого zip
-            await status_msg.edit_text("Архив получился пустым. Скорее всего Ютуб заблокировал поиск или трек не найден.")
+        if not zip_path.exists() or zip_path.stat().st_size <= 22:
+            await status_msg.edit_text("Архив получился пустым. Возможно, Ютуб заблокировал запросы.")
             return
 
-        await status_msg.edit_text("Готово! Отправляю архив...")
+        await status_msg.edit_text("🤐 Упаковываю в архив и отправляю...")
         document = FSInputFile(zip_path, filename="music_archive.zip")
         await message.answer_document(document)
+        
+        # Логируем успешное скачивание в БД
+        log_user_and_tracks(message.from_user.id, message.from_user.username, len(tracks))
 
-    except Exception as err:
+    except Exception err:
         await message.answer(f"Ошибка при обработке: {err}")
     finally:
         if user_dir.exists():
@@ -114,9 +193,9 @@ async def process_tracks_pipeline(message: Message, tracks: list[str]):
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
-async def handle_text_tracks(message: Message):
+async def handle_text_tracks(message: Message, bot: Bot):
     tracks = [line.strip() for line in message.text.split("\n") if line.strip()]
-    await process_tracks_pipeline(message, tracks)
+    await process_tracks_pipeline(message, tracks, bot)
 
 
 @dp.message(F.document)
@@ -127,18 +206,24 @@ async def handle_file_tracks(message: Message, bot: Bot):
 
     file_info = await bot.get_file(message.document.file_id)
     file_bytes = await bot.download_file(file_info.file_path)
-    content = file_bytes.read().decode('utf-8', errors='ignore')
+    content = file_bytes.getvalue().decode('utf-8', errors='ignore')
     
     tracks = [line.strip() for line in content.split("\n") if line.strip()]
-    await process_tracks_pipeline(message, tracks)
+    await process_tracks_pipeline(message, tracks, bot)
 
 
 async def main():
-    session = AiohttpSession(timeout=60)
-    bot = Bot(token=BOT_TOKEN, session=session)
-    await bot.delete_webhook(drop_pending_updates=True)
-    print("Бот запущен...")
-    await dp.start_polling(bot)
+    # Запуск инициализации БД перед стартом бота
+    init_db()
+    
+    async with AiohttpSession(timeout=60) as session:
+        bot = Bot(token=BOT_TOKEN, session=session)
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("Бот запущен...")
+        try:
+            await dp.start_polling(bot)
+        finally:
+            await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
