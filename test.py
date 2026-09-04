@@ -185,7 +185,7 @@ async def process_tracks_pipeline(message: Message, tracks: list[str], bot: Bot)
         # Логируем успешное скачивание в БД
         log_user_and_tracks(message.from_user.id, message.from_user.username, len(tracks))
 
-    except Exception err:
+    except Exception as err:
         await message.answer(f"Ошибка при обработке: {err}")
     finally:
         if user_dir.exists():
