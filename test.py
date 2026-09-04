@@ -18,8 +18,8 @@ import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8815241508:AAHt-iNsD7I6rfnxl54jBceq2uKGM65zw2U")
 
-# ⚠️ ТВОЙ USER ID ДЛЯ АДМИНКИ
-ADMIN_ID = 7381026134
+# ⚠️ СПИСОК USER ID ВСЕХ АДМИНОВ (добавляй сюда айдишники через запятую)
+ADMIN_IDS = [7381026134]
 
 dp = Dispatcher()
 DB_PATH = "bot_database.db"
@@ -125,11 +125,9 @@ async def start_cmd(message: Message):
     await message.answer(text)
 
 
-@dp.message(Command("admin"))
+# Хэндлер админки с поддержкой нескольких админов
+@dp.message(Command("admin"), F.from_user.id.in_(ADMIN_IDS))
 async def admin_stats(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
     users_count, tracks_count = get_stats()
     admin_text = (
         "📊 **Статистика бота:**\n\n"
@@ -160,11 +158,10 @@ async def process_tracks_pipeline(message: Message, tracks: list[str], bot: Bot)
     status_msg = await message.answer(f"Принято! Начинаю обработку {len(tracks)} треков...")
     user_dir = Path(f"downloads/user_{message.from_user.id}_{message.message_id}")
 
-    # Захватываем текущий running event loop в основном асинхронном потоке
+    # Захватываем текущий event loop в основном асинхронном потоке
     loop = asyncio.get_running_loop()
 
     try:
-        # Передаем loop аргументом
         zip_path = await asyncio.to_thread(
             download_tracks_and_zip, tracks, user_dir, bot, message.chat.id, status_msg.message_id, loop
         )
