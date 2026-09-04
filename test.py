@@ -19,7 +19,7 @@ import yt_dlp
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8815241508:AAH7f8OjItQ6FhVXXJTY15OcI7VrI6xFuQk")
 
 # ⚠️ ТВОЙ USER ID ДЛЯ АДМИНКИ (впиши сюда свой настоящий ID)
-ADMIN_ID = 67542741
+ADMIN_ID = 7381026134
 
 dp = Dispatcher()
 DB_PATH = "bot_database.db"
