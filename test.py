@@ -18,7 +18,7 @@ import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8815241508:AAHt-iNsD7I6rfnxl54jBceq2uKGM65zw2U")
 
-# ⚠️ ТВОЙ USER ID ДЛЯ АДМИНКИ (впиши сюда свой настоящий ID)
+# ⚠️ ТВОЙ USER ID ДЛЯ АДМИНКИ
 ADMIN_ID = 7381026134
 
 dp = Dispatcher()
@@ -29,21 +29,18 @@ def init_db():
     """Создает таблицы, если их еще нет"""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        # Таблица пользователей
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT
             )
         """)
-        # Таблица общей статистики
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS stats (
                 key TEXT PRIMARY KEY,
                 value INTEGER
             )
         """)
-        # Инициализируем счетчик треков, если его нет
         cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_tracks', 0)")
         conn.commit()
 
@@ -51,7 +48,7 @@ def log_user_and_tracks(user_id: int, username: str, tracks_count: int):
     """Записывает юзера в БД и увеличивает счетчик скачанных треков"""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+        cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username or ""))
         cursor.execute("UPDATE stats SET value = value + ? WHERE key = 'total_tracks'", (tracks_count,))
         conn.commit()
 
@@ -68,9 +65,7 @@ def get_stats():
 # ==============================================================
 
 
-# Функция обертки для кастомного логирования прогресса yt-dlp нам не подойдет для точного счета "1 из 5",
-# поэтому мы будем обновлять статус прямо в цикле перебора треков.
-def download_tracks_and_zip(tracks: list[str], user_dir: Path, bot: Bot, chat_id: int, status_msg_id: int) -> Path:
+def download_tracks_and_zip(tracks: list[str], user_dir: Path, bot: Bot, chat_id: int, status_msg_id: int, loop: asyncio.AbstractEventLoop) -> Path:
     music_dir = user_dir / "music"
     music_dir.mkdir(parents=True, exist_ok=True)
 
@@ -83,7 +78,7 @@ def download_tracks_and_zip(tracks: list[str], user_dir: Path, bot: Bot, chat_id
             'preferredquality': '320',
         }],
         'outtmpl': str(music_dir / '%(title)s.%(ext)s'),
-        'quiet': True,  # Выключаем лишний спам в консоль
+        'quiet': True,
         'no_warnings': True,
         'extractor_args': {
             'youtube': {
@@ -96,12 +91,11 @@ def download_tracks_and_zip(tracks: list[str], user_dir: Path, bot: Bot, chat_id
         }
     }
 
-    loop = asyncio.get_event_loop()
-
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         for index, track in enumerate(tracks, start=1):
-            # Изменяем текст сообщения в телеграме (вызываем асинхронный метод внутри синхронной функции)
             status_text = f"⏳ Скачиваю трек {index} из {len(tracks)}:\n`{track}`"
+            
+            # Безопасно передаем задачу в основной event loop из потока
             asyncio.run_coroutine_threadsafe(
                 bot.edit_message_text(status_text, chat_id=chat_id, message_id=status_msg_id, parse_mode="Markdown"),
                 loop
@@ -131,11 +125,9 @@ async def start_cmd(message: Message):
     await message.answer(text)
 
 
-# Хэндлер для админки (доступ только по ADMIN_ID)
 @dp.message(Command("admin"))
 async def admin_stats(message: Message):
     if message.from_user.id != ADMIN_ID:
-        # Обычным юзерам бот просто ничего не ответит или скажет, что команды нет
         return
 
     users_count, tracks_count = get_stats()
@@ -168,10 +160,13 @@ async def process_tracks_pipeline(message: Message, tracks: list[str], bot: Bot)
     status_msg = await message.answer(f"Принято! Начинаю обработку {len(tracks)} треков...")
     user_dir = Path(f"downloads/user_{message.from_user.id}_{message.message_id}")
 
+    # Захватываем текущий running event loop в основном асинхронном потоке
+    loop = asyncio.get_running_loop()
+
     try:
-        # Передаем bot, chat_id и id сообщения для динамического обновления текста
+        # Передаем loop аргументом
         zip_path = await asyncio.to_thread(
-            download_tracks_and_zip, tracks, user_dir, bot, message.chat.id, status_msg.message_id
+            download_tracks_and_zip, tracks, user_dir, bot, message.chat.id, status_msg.message_id, loop
         )
 
         if not zip_path.exists() or zip_path.stat().st_size <= 22:
@@ -213,17 +208,13 @@ async def handle_file_tracks(message: Message, bot: Bot):
 
 
 async def main():
-    # Запуск инициализации БД перед стартом бота
     init_db()
     
     async with AiohttpSession(timeout=60) as session:
         bot = Bot(token=BOT_TOKEN, session=session)
         await bot.delete_webhook(drop_pending_updates=True)
         print("Бот запущен...")
-        try:
-            await dp.start_polling(bot)
-        finally:
-            await bot.session.close()
+        await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
