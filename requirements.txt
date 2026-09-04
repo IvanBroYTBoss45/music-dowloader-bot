@@ -1,3 +1,5 @@
 aiogram
 yt_dlp
 static-ffmpeg
+subprocess
+sqlite3
